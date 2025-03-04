@@ -11,5 +11,14 @@
   "description": "",
   "dependencies": {
     "axios": "^1.8.1"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Gaazzeebo/MHLLambda.git"
+  },
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Gaazzeebo/MHLLambda/issues"
+  },
+  "homepage": "https://github.com/Gaazzeebo/MHLLambda#readme"
 }
