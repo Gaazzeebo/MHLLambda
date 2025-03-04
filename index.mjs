@@ -1,8 +1,24 @@
 import axios from 'axios';
 
-export const handler = async (event) => {
-  console.log('Event received:', JSON.stringify(event));
+// Fallback data if the API call fails
+const fallbackProducts = [
+  {
+    catalogid: 999,
+    name: 'Fallback Product v1',
+    price: 9.99,
+    thumbnailurl: '/assets/logo-placeholder.png',
+    mainimagefile: '/assets/logo-placeholder.png',
+    description: 'Returned if the 3dcart v1 API call fails.',
+    stock: 99,
+    featured: false,
+    categoryid: 'shift4shop',
+  },
+];
 
+export const handler = async (event) => {
+  console.log('===> Event received:', JSON.stringify(event));
+
+  // 1. Basic CORS Handling
   const origin = event.headers?.origin || '*';
   const corsHeaders = {
     'Access-Control-Allow-Origin': origin,
@@ -11,6 +27,7 @@ export const handler = async (event) => {
     'Content-Type': 'application/json',
   };
 
+  // Handle OPTIONS (CORS preflight)
   if (event.httpMethod === 'OPTIONS') {
     return {
       statusCode: 200,
@@ -19,93 +36,64 @@ export const handler = async (event) => {
     };
   }
 
-  // Shift4Shop credentials (use environment variables)
-  const storeUrl = 'https://311n16875921454.s4shops.com';
-  const clientId = process.env.SHIFT4SHOP_CLIENT_ID || 'your-client-id';
-  const clientSecret = process.env.SHIFT4SHOP_CLIENT_SECRET || 'your-client-secret';
+  // 2. Read environment variables (or use default hard-coded values)
+  const storeUrl = process.env.SHIFT4SHOP_STORE_URL || 'https://apirest.3dcart.com';
+  const privateKey = process.env.SHIFT4SHOP_PRIVATE_KEY || '37ab4b76efdd4a63c967655b9d616610';
+  const token = process.env.SHIFT4SHOP_TOKEN || '910d514950707115391650f15e36aa56';
 
-  if (!clientId || !clientSecret) {
-    console.error('Missing Shift4Shop credentials');
+  // 3. The merchant's secure URL – typically the live store's URL.
+  // Based on your store settings, it is likely:
+  const secureUrl = 'https://311n16875921454.s4shops.com';
+
+  // 4. Validate required credentials
+  if (!storeUrl || !privateKey || !token) {
+    console.error('===> Missing one or more required environment variables.');
     return {
       statusCode: 500,
       headers: corsHeaders,
-      body: JSON.stringify({ error: 'Missing Shift4Shop API credentials' }),
+      body: JSON.stringify({
+        error: 'Missing SHIFT4SHOP_STORE_URL, SHIFT4SHOP_PRIVATE_KEY, or SHIFT4SHOP_TOKEN',
+      }),
     };
   }
 
-  // OAuth token request
-  const tokenUrl = `${storeUrl}/oauth/token`; // Verify this with Shift4Shop docs
-  let accessToken;
+  // 5. Build the API endpoint URL for v1 (with limit=100)
+  // Since SHIFT4SHOP_STORE_URL is set to "https://apirest.3dcart.com",
+  // the final URL will be "https://apirest.3dcart.com/3dCartWebAPI/v1/Products?limit=100"
+  const apiUrl = `${storeUrl}/3dCartWebAPI/v1/Products?limit=100`;
+  console.log(`===> Attempting to fetch products from: ${apiUrl}`);
 
-  try {
-    const tokenResponse = await axios.post(
-      tokenUrl,
-      new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: clientId,
-        client_secret: clientSecret,
-      }).toString(),
-      {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        timeout: 5000,
-      }
-    );
-    accessToken = tokenResponse.data.access_token;
-    console.log('OAuth token obtained');
-  } catch (tokenError) {
-    console.error('OAuth token error:', tokenError.message);
-    return {
-      statusCode: 500,
-      headers: corsHeaders,
-      body: JSON.stringify({ error: 'Failed to authenticate with Shift4Shop API' }),
-    };
-  }
-
-  // Shift4Shop API request
-  const apiUrl = `${storeUrl}/api/v1/Products`; // Use store-specific v1 endpoint
   try {
     const response = await axios.get(apiUrl, {
       headers: {
-        'Authorization': `Bearer ${accessToken}`,
+        PrivateKey: privateKey,
+        Token: token,
+        SecureURL: secureUrl, // Added this header per 3dcart requirements
+        Accept: 'application/json',
         'Content-Type': 'application/json',
-        'Accept': 'application/json',
       },
-      params: { limit: 50 },
       timeout: 10000,
     });
 
-    console.log('API response received:', response.status);
-    const mappedProducts = response.data.map(product => ({
-      catalogid: product.CatalogID || product.catalogid || product.id,
-      name: product.Name || product.name,
-      price: parseFloat(product.Price || product.price) || 0,
-      listprice: product.ListPrice ? parseFloat(product.ListPrice) : undefined,
-      thumbnailurl: product.ThumbnailURL || product.thumbnail || product.MainImage || '/assets/logo-placeholder.png',
-      mainimagefile: product.MainImage || product.mainimagefile || '/assets/logo-placeholder.png',
-      description: product.Description || '',
-      stock: parseInt(product.Stock || product.stock, 10) || 0,
-      featured: product.Featured || false,
-      categoryid: product.CategoryID || product.categoryid || 'shift4shop',
-    }));
+    console.log('===> 3dcart v1 API response status:', response.status);
+    console.log('===> 3dcart v1 API data length:', response.data?.length);
 
     return {
       statusCode: 200,
       headers: corsHeaders,
-      body: JSON.stringify(mappedProducts),
+      body: JSON.stringify(response.data),
     };
   } catch (error) {
-    console.error('API fetch error:', error.message);
+    console.error('===> 3dcart v1 API fetch error:', error.message);
     if (error.response) {
-      console.log('Error response:', error.response.data);
+      console.error('===> Error response data:', error.response.data);
+      console.error('===> Error response status:', error.response.status);
     }
-
-    // Fallback to static data
-    console.log('Falling back to static products');
-    const staticProducts = [ /* Your staticProducts array here */ ];
+    console.log('===> Falling back to fallbackProducts array...');
     return {
       statusCode: 200,
       headers: corsHeaders,
-      body: JSON.stringify(staticProducts),
+      body: JSON.stringify(fallbackProducts),
     };
   }
 };
