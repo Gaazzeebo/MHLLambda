@@ -57,7 +57,7 @@ const allowedOrigins = [
 ];
 
 export const handler = async (event) => {
-  console.log('===> Event received:', JSON.stringify(event));
+  console.log('===> [DEBUG] Event received:', JSON.stringify(event, null, 2));
 
   // 1. Improved CORS Handling
   const requestOrigin = event.headers?.origin || '*';
@@ -70,6 +70,7 @@ export const handler = async (event) => {
 
   // Handle OPTIONS (CORS preflight)
   if (event.httpMethod === 'OPTIONS') {
+    console.log('===> [DEBUG] Handling OPTIONS preflight request');
     return {
       statusCode: 200,
       headers: corsHeaders,
@@ -78,7 +79,6 @@ export const handler = async (event) => {
   }
 
   // 2. Read environment variables (or use hard-coded values)
-  // IMPORTANT: Use https instead of http for the EC2 proxy
   const storeUrl = process.env.SHIFT4SHOP_STORE_URL || 'https://3.146.128.151';
   const privateKey = process.env.SHIFT4SHOP_PRIVATE_KEY || '37ab4b76efdd4a63c967655b9d616610';
   const token = process.env.SHIFT4SHOP_TOKEN || '40e9abb2b22b00a5a9cb5aaad56eb818';
@@ -86,12 +86,20 @@ export const handler = async (event) => {
   // 3. The merchant's secure URL – your store URL
   const secureUrl = '311n16875921454.3dcartstores.com';
   
-  console.log('===> Using credentials - Store URL:', storeUrl, 'SecureURL:', secureUrl, 'Token Length:', token.length);
-  console.log('===> Token verification (first 8 chars):', token.substring(0, 8));
+  // Merchant number from Shift4Shop admin panel
+  const merchantNumber = "0021819990";
+  
+  console.log('===> [DEBUG] Credentials:', {
+    storeUrl,
+    secureUrl,
+    tokenLength: token.length,
+    tokenSnippet: token.substring(0, 8),
+    merchantNumber
+  });
 
   // 4. Validate required credentials
   if (!storeUrl || !privateKey || !token) {
-    console.error('===> Missing one or more required environment variables.');
+    console.error('===> [ERROR] Missing required environment variables:', { storeUrl, privateKey, token });
     return {
       statusCode: 500,
       headers: corsHeaders,
@@ -101,7 +109,7 @@ export const handler = async (event) => {
     };
   }
 
-  // 5. Determine the resource path.
+  // 5. Determine the resource path
   let resourcePath = '';
   if (event.pathParameters && event.pathParameters.proxy) {
     resourcePath = `/${event.pathParameters.proxy}`;
@@ -110,40 +118,45 @@ export const handler = async (event) => {
   } else if (event.path) {
     resourcePath = event.path;
   }
-  console.log('===> Resource path extracted:', resourcePath);
+  console.log('===> [DEBUG] Resource path:', resourcePath);
 
   // 6. Build query string from event query parameters (if any)
   let queryParams = [];
   if (event.queryStringParameters) {
     for (const [key, value] of Object.entries(event.queryStringParameters)) {
-      // Exclude pagination parameters if desired (or keep them if needed)
       if (key.toLowerCase() !== 'page') {
         queryParams.push(`${encodeURIComponent(key)}=${encodeURIComponent(value)}`);
       }
     }
   }
   const queryString = queryParams.length > 0 ? `?${queryParams.join('&')}` : '';
+  console.log('===> [DEBUG] Query string:', queryString);
 
   // 7. Parse request body if present
   let requestBody = null;
   if (event.body) {
     try {
       requestBody = JSON.parse(event.body);
+      console.log('===> [DEBUG] Parsed request body:', JSON.stringify(requestBody, null, 2));
     } catch (error) {
-      console.error('===> Error parsing request body:', error);
+      console.error('===> [ERROR] Failed to parse request body:', error.message);
       return {
         statusCode: 400,
         headers: corsHeaders,
-        body: JSON.stringify({ error: 'Invalid request body' }),
+        body: JSON.stringify({ error: 'Invalid request body', details: error.message }),
       };
     }
   }
 
-  console.log(`===> Request details:
-    Path: ${event.path}
-    Resource Path: ${resourcePath}
-    HTTP Method: ${event.httpMethod}
-    Query String: ${queryString}`);
+  console.log('===> [DEBUG] Request summary:', {
+    path: event.path,
+    resourcePath,
+    httpMethod: event.httpMethod,
+    queryString
+  });
+
+  // Define finalUrl at a higher scope
+  let finalUrl = '';
 
   try {
     let response;
@@ -155,27 +168,25 @@ export const handler = async (event) => {
       'Token': token,
       'Accept': 'application/json',
       'Content-Type': 'application/json',
-      // Add additional headers to force live mode
       'X-Transaction-Mode': 'live',
       'X-Environment': 'production'
     };
 
-    // Log headers with sensitive info masked
-    console.log('===> API request headers:', {
+    console.log('===> [DEBUG] API headers (sensitive masked):', {
       ...headers,
-      'PrivateKey': '***HIDDEN***',
-      'Token': '***HIDDEN***'
+      PrivateKey: '***HIDDEN***',
+      Token: '***HIDDEN***'
     });
 
     // Handle orders with specific ID (GET or PUT)
     if ((event.httpMethod === 'GET' || event.httpMethod === 'PUT') && 
         resourcePath.toLowerCase().match(/\/orders\/[^/]+$/i)) {
       
-      // Extract the order ID from the path
       const orderIdMatch = resourcePath.match(/\/orders\/(.+)$/i);
       const orderId = orderIdMatch ? orderIdMatch[1] : null;
       
       if (!orderId) {
+        console.error('===> [ERROR] Invalid order ID in path:', resourcePath);
         return {
           statusCode: 400,
           headers: corsHeaders,
@@ -183,11 +194,9 @@ export const handler = async (event) => {
         };
       }
       
-      // Check if this is a test order
       if (orderId.toLowerCase().startsWith('test-')) {
-        console.log(`===> Handling ${event.httpMethod} request for test order: ${orderId}`);
+        console.log('===> [DEBUG] Handling test order:', { orderId, method: event.httpMethod });
         
-        // For GET requests, return mock data
         if (event.httpMethod === 'GET') {
           return {
             statusCode: 200,
@@ -196,9 +205,8 @@ export const handler = async (event) => {
           };
         }
         
-        // For PUT requests on test orders, simulate success
         if (event.httpMethod === 'PUT') {
-          console.log('===> Processing PUT for test order, returning success response');
+          console.log('===> [DEBUG] Simulating PUT success for test order:', orderId);
           return {
             statusCode: 200,
             headers: corsHeaders,
@@ -214,43 +222,45 @@ export const handler = async (event) => {
         }
       }
       
-      // For actual orders, proceed with API call
-      const finalUrl = `${storeUrl}/3dCartWebAPI/v1${resourcePath}${queryString}`;
-      console.log(`===> Making ${event.httpMethod} request to: ${finalUrl}`);
+      finalUrl = `${storeUrl}/3dCartWebAPI/v1${resourcePath}${queryString}`;
+      console.log('===> [DEBUG] Making request:', { method: event.httpMethod, url: finalUrl });
       
       try {
         if (event.httpMethod === 'GET') {
           response = await axios.get(finalUrl, { 
             headers, 
-            timeout: 15000,  // Increased timeout
-            validateStatus: function (status) {
-              return status < 500; // Accept any status code less than 500
-            }
+            timeout: 15000,
+            validateStatus: status => status < 500
           });
         } else if (event.httpMethod === 'PUT') {
-          console.log('===> PUT request body:', JSON.stringify(requestBody).substring(0, 1000));
+          console.log('===> [DEBUG] PUT request body:', JSON.stringify(requestBody, null, 2));
           response = await axios.put(finalUrl, requestBody, { 
             headers, 
-            timeout: 15000,  // Increased timeout
-            validateStatus: function (status) {
-              return status < 500; // Accept any status code less than 500
-            }
+            timeout: 15000,
+            validateStatus: status => status < 500
           });
         }
         
-        console.log(`===> API response status: ${response.status}`);
+        console.log('===> [DEBUG] API response:', {
+          status: response.status,
+          data: JSON.stringify(response.data, null, 2)
+        });
         return {
           statusCode: 200,
           headers: corsHeaders,
           body: JSON.stringify(response.data),
         };
       } catch (error) {
-        console.error(`===> ${event.httpMethod} request error:`, error.message);
-        console.error('===> Full error details:', JSON.stringify(error.response || error, null, 2));
+        console.error('===> [ERROR] Request failed:', {
+          method: event.httpMethod,
+          url: finalUrl,
+          error: error.message,
+          status: error.response?.status,
+          data: error.response?.data ? JSON.stringify(error.response.data, null, 2) : 'No data'
+        });
         
-        // For GET requests that fail with 404, return mock data
-        if (event.httpMethod === 'GET' && error.response && error.response.status === 404) {
-          console.log(`===> Order ${orderId} not found, creating mock data`);
+        if (event.httpMethod === 'GET' && error.response?.status === 404) {
+          console.log('===> [DEBUG] Order not found, returning mock data:', orderId);
           return {
             statusCode: 200,
             headers: corsHeaders,
@@ -258,11 +268,10 @@ export const handler = async (event) => {
           };
         }
         
-        // For PUT requests that fail, return more helpful error
         if (event.httpMethod === 'PUT') {
-          console.error(`===> Failed to update order ${orderId}:`, error.message);
+          console.error('===> [ERROR] Failed to update order:', orderId);
           return {
-            statusCode: 200, // Return 200 even for errors to avoid CORS issues
+            statusCode: 200,
             headers: corsHeaders,
             body: JSON.stringify([
               {
@@ -275,15 +284,7 @@ export const handler = async (event) => {
           };
         }
         
-        // Return the actual error response
-        return {
-          statusCode: error.response?.status || 500,
-          headers: corsHeaders,
-          body: JSON.stringify({
-            error: error.message,
-            message: `Failed to process ${event.httpMethod} request to ${resourcePath}`
-          }),
-        };
+        throw error;
       }
     }
 
@@ -291,54 +292,47 @@ export const handler = async (event) => {
     if (event.httpMethod === 'GET' && resourcePath.toLowerCase() === '/products') {
       try {
         let allProducts = [];
-        const limit = event.queryStringParameters && event.queryStringParameters.limit
-                        ? parseInt(event.queryStringParameters.limit)
-                        : 50;
-        let offset = event.queryStringParameters && event.queryStringParameters.offset
-                        ? parseInt(event.queryStringParameters.offset)
-                        : 0;
+        const limit = event.queryStringParameters?.limit ? parseInt(event.queryStringParameters.limit) : 50;
+        let offset = event.queryStringParameters?.offset ? parseInt(event.queryStringParameters.offset) : 0;
         let fetchMore = true;
         
         while (fetchMore) {
           const pageQuery = `?limit=${limit}&offset=${offset}${queryString ? '&' + queryString.substring(1) : ''}`;
           const pageUrl = `${storeUrl}/3dCartWebAPI/v1${resourcePath}${pageQuery}`;
-          console.log(`===> Fetching products with offset ${offset} from: ${pageUrl}`);
+          console.log('===> [DEBUG] Fetching products:', { offset, url: pageUrl });
           const pageResponse = await axios.get(pageUrl, { 
             headers, 
-            timeout: 15000,  // Increased timeout
-            validateStatus: function (status) {
-              return status < 500; // Accept any status code less than 500
-            }
+            timeout: 15000,
+            validateStatus: status => status < 500
           });
-          console.log(`===> Offset ${offset} response status: ${pageResponse.status}`);
+          console.log('===> [DEBUG] Products response:', {
+            offset,
+            status: pageResponse.status,
+            count: pageResponse.data?.length || 0
+          });
           if (pageResponse.data && Array.isArray(pageResponse.data)) {
-            console.log(`===> Received ${pageResponse.data.length} products in this batch`);
-            if (pageResponse.data.length === 0) {
-              fetchMore = false;
-            } else {
-              allProducts = allProducts.concat(pageResponse.data);
-              if (pageResponse.data.length < limit) {
-                fetchMore = false;
-              } else {
-                offset += limit;
-              }
-            }
+            allProducts = allProducts.concat(pageResponse.data);
+            fetchMore = pageResponse.data.length === limit;
+            offset += limit;
           } else {
             fetchMore = false;
           }
         }
         
-        console.log(`===> Total products retrieved: ${allProducts.length}`);
+        console.log('===> [DEBUG] Total products retrieved:', allProducts.length);
         return {
           statusCode: 200,
           headers: corsHeaders,
           body: JSON.stringify(allProducts),
         };
       } catch (error) {
-        console.error(`===> Error fetching products: ${error.message}`);
-        console.error('===> Full error details:', JSON.stringify(error.response || error, null, 2));
+        console.error('===> [ERROR] Failed to fetch products:', {
+          message: error.message,
+          status: error.response?.status,
+          data: error.response?.data ? JSON.stringify(error.response.data, null, 2) : 'No data'
+        });
         return {
-          statusCode: 200, // Return 200 even on error for better frontend handling
+          statusCode: 200,
           headers: corsHeaders,
           body: JSON.stringify(fallbackProducts),
         };
@@ -348,34 +342,23 @@ export const handler = async (event) => {
     // Special handling for checking Payment Method settings
     if (event.httpMethod === 'GET' && resourcePath.toLowerCase() === '/paymentmethods') {
       try {
-        console.log('===> Checking payment method settings to determine Test Mode status');
         const paymentMethodsUrl = `${storeUrl}/3dCartWebAPI/v1/PaymentMethods${queryString}`;
+        console.log('===> [DEBUG] Checking payment methods:', paymentMethodsUrl);
         const paymentResponse = await axios.get(paymentMethodsUrl, { 
           headers, 
-          timeout: 15000,  // Increased timeout
-          validateStatus: function (status) {
-            return status < 500; // Accept any status code less than 500
-          }
+          timeout: 15000,
+          validateStatus: status => status < 500
         });
         
-        if (paymentResponse.data && Array.isArray(paymentResponse.data)) {
-          // Log payment method settings
-          const paymentMethods = paymentResponse.data;
-          console.log(`===> Found ${paymentMethods.length} payment methods`);
-          
-          // Check for test mode enabled in any payment method
-          const testModeEnabled = paymentMethods.some(pm => pm.TestMode === true);
-          console.log(`===> Test Mode Enabled in Payment Methods: ${testModeEnabled ? 'YES' : 'NO'}`);
-          
-          // Log details about each payment method
-          paymentMethods.forEach((pm, index) => {
-            console.log(`===> Payment Method #${index + 1}: ${pm.PaymentMethodName || 'Unnamed'}`);
-            console.log(`     - Method ID: ${pm.PaymentMethodID}`);
-            console.log(`     - Test Mode: ${pm.TestMode === true ? 'ENABLED' : 'Disabled'}`);
-            console.log(`     - Active: ${pm.Active === true ? 'Yes' : 'No'}`);
-            console.log(`     - Method Type: ${pm.MethodType || 'Unknown'}`);
-          });
-        }
+        console.log('===> [DEBUG] Payment methods response:', {
+          status: paymentResponse.status,
+          methods: paymentResponse.data?.map(pm => ({
+            name: pm.PaymentMethodName,
+            id: pm.PaymentMethodID,
+            testMode: pm.TestMode,
+            active: pm.Active
+          }))
+        });
         
         return {
           statusCode: 200,
@@ -383,8 +366,11 @@ export const handler = async (event) => {
           body: JSON.stringify(paymentResponse.data || []),
         };
       } catch (error) {
-        console.error('===> Error fetching payment methods:', error.message);
-        console.error('===> Full error details:', JSON.stringify(error.response || error, null, 2));
+        console.error('===> [ERROR] Failed to fetch payment methods:', {
+          message: error.message,
+          status: error.response?.status,
+          data: error.response?.data ? JSON.stringify(error.response.data, null, 2) : 'No data'
+        });
         return {
           statusCode: 200,
           headers: corsHeaders,
@@ -393,17 +379,20 @@ export const handler = async (event) => {
       }
     }
     
-    // Special handling for OrderStatus to improve performance
+    // Special handling for OrderStatus
     if (event.httpMethod === 'GET' && resourcePath.toLowerCase() === '/orderstatus') {
       try {
         const orderStatusUrl = `${storeUrl}/3dCartWebAPI/v1/OrderStatus${queryString}`;
-        console.log(`===> Fetching order statuses from: ${orderStatusUrl}`);
+        console.log('===> [DEBUG] Fetching order statuses:', orderStatusUrl);
         const statusResponse = await axios.get(orderStatusUrl, { 
           headers, 
-          timeout: 15000,  // Increased timeout
-          validateStatus: function (status) {
-            return status < 500; // Accept any status code less than 500
-          }
+          timeout: 15000,
+          validateStatus: status => status < 500
+        });
+        
+        console.log('===> [DEBUG] Order statuses response:', {
+          status: statusResponse.status,
+          count: statusResponse.data?.length || 0
         });
         
         return {
@@ -412,9 +401,11 @@ export const handler = async (event) => {
           body: JSON.stringify(statusResponse.data || fallbackOrderStatuses),
         };
       } catch (error) {
-        console.error('===> Error fetching order statuses:', error.message);
-        console.error('===> Full error details:', JSON.stringify(error.response || error, null, 2));
-        // Only fall back for this specific endpoint as it's critical for the app
+        console.error('===> [ERROR] Failed to fetch order statuses:', {
+          message: error.message,
+          status: error.response?.status,
+          data: error.response?.data ? JSON.stringify(error.response.data, null, 2) : 'No data'
+        });
         return {
           statusCode: 200,
           headers: corsHeaders,
@@ -423,94 +414,62 @@ export const handler = async (event) => {
       }
     }
     
-    // For all other endpoints (including orders and related resources)
+    // For all other endpoints (including orders)
     const apiUrl = `${storeUrl}/3dCartWebAPI/v1${resourcePath}${queryString}`;
-    console.log(`===> Making ${event.httpMethod} request to: ${apiUrl}`);
+    console.log('===> [DEBUG] Preparing request:', { method: event.httpMethod, url: apiUrl });
     
     // Add order-specific query parameters for POST requests to Orders
     let orderQueryString = queryString;
     if (event.httpMethod === 'POST' && resourcePath.toLowerCase() === '/orders') {
-      // Check if we need to check payment method settings first
       try {
-        console.log('===> Checking payment method settings before creating order');
         const paymentMethodsUrl = `${storeUrl}/3dCartWebAPI/v1/PaymentMethods`;
+        console.log('===> [DEBUG] Checking payment methods before order creation:', paymentMethodsUrl);
         const paymentResponse = await axios.get(paymentMethodsUrl, { 
           headers, 
-          timeout: 15000,  // Increased timeout
-          validateStatus: function (status) {
-            return status < 500; // Accept any status code less than 500
-          }
+          timeout: 15000,
+          validateStatus: status => status < 500
         });
         
-        if (paymentResponse.data && Array.isArray(paymentResponse.data)) {
-          // Check for test mode enabled in any payment method
-          const paymentMethods = paymentResponse.data;
-          const testModeEnabled = paymentMethods.some(pm => pm.TestMode === true);
-          console.log(`===> 🔴 Test Mode Status: ${testModeEnabled ? 'ENABLED IN PAYMENT METHODS' : 'DISABLED'}`);
-          
-          // Log details about each payment method
-          paymentMethods.forEach((pm, index) => {
-            if (pm.TestMode === true) {
-              console.log(`===> 🔴 WARNING: Test Mode ENABLED for payment method: ${pm.PaymentMethodName || 'Unnamed'} (ID: ${pm.PaymentMethodID})`);
-            }
-          });
-          
-          // Add additional debugging
-          if (testModeEnabled) {
-            console.log('===> 🔴 WARNING: Test Mode is enabled in your Shift4Shop admin. Orders will be created as test orders.');
-            console.log('===> 🔴 To accept real payments, disable Test Mode in Settings > Payment Methods');
-          }
-        }
+        console.log('===> [DEBUG] Payment methods status:', {
+          status: paymentResponse.status,
+          testModeEnabled: paymentResponse.data?.some(pm => pm.TestMode === true),
+          methods: paymentResponse.data?.map(pm => ({
+            name: pm.PaymentMethodName,
+            id: pm.PaymentMethodID,
+            testMode: pm.TestMode
+          }))
+        });
       } catch (error) {
-        console.error('===> Could not check payment method settings:', error.message);
-        console.error('===> Full error details:', JSON.stringify(error.response || error, null, 2));
+        console.error('===> [ERROR] Failed to check payment methods:', {
+          message: error.message,
+          status: error.response?.status,
+          data: error.response?.data ? JSON.stringify(error.response.data, null, 2) : 'No data'
+        });
       }
 
-      // Build order-specific query parameters
-      let orderParams = [];
-      if (queryString) {
-        orderParams = queryString.substring(1).split('&');
-      }
-      
-      // Process bypassorderprocessing parameter - we DON'T want to bypass
-      const bypassParam = orderParams.find(param => param.startsWith('bypassorderprocessing='));
-      if (!bypassParam) {
-        // We want real payment processing, so set to false
-        orderParams.push('bypassorderprocessing=false');
-      }
-      
-      // Process bypassorderemail parameter - we DO want emails
-      const bypassEmailParam = orderParams.find(param => param.startsWith('bypassorderemail='));
-      if (!bypassEmailParam) {
-        // We want email to be sent
-        orderParams.push('bypassorderemail=false');
-      }
-      
-      // Add explicit live mode flag - CRITICAL FOR LIVE ORDERS
+      // Define order processing parameters carefully
+      let orderParams = queryString ? queryString.substring(1).split('&') : [];
+      orderParams.push('bypassorderprocessing=false');
+      orderParams.push('bypassorderemail=false');
       orderParams.push('testmode=false');
+      orderParams.push('ProcessPayment=true');
+      orderParams.push('ChargeMethod=API');
+      orderParams.push('OnlinePaymentProcessing=true');
+      orderParams.push('TransactionType=Sale');
+      orderParams.push('TransactionMode=live');
+      orderParams.push('AcceptOrder=true');
       
-      // Force transaction mode to be live
-      if (requestBody) {
-        requestBody.TransactionMode = "live";
-      }
-      
-      // Construct final query string
       orderQueryString = `?${orderParams.join('&')}`;
-      
-      console.log(`===> Order processing parameters: ${orderQueryString}`);
-      console.log(`===> Force transaction mode: ${requestBody ? requestBody.TransactionMode : 'not set in body'}`);
+      console.log('===> [DEBUG] Order query parameters:', orderQueryString);
     }
     
-    const finalUrl = `${storeUrl}/3dCartWebAPI/v1${resourcePath}${orderQueryString}`;
-    console.log(`===> Final URL for request: ${finalUrl}`);
+    finalUrl = `${storeUrl}/3dCartWebAPI/v1${resourcePath}${orderQueryString}`;
+    console.log('===> [DEBUG] Final request URL:', finalUrl);
     
-    // Common axios options for all requests
     const axiosOptions = { 
       headers, 
-      timeout: 20000,  // Increased timeout for longer operations
-      validateStatus: function (status) {
-        return status < 500; // Accept any status code less than 500
-      }
+      timeout: 20000,
+      validateStatus: status => status < 500
     };
     
     switch (event.httpMethod) {
@@ -518,63 +477,139 @@ export const handler = async (event) => {
         response = await axios.get(finalUrl, axiosOptions);
         break;
       case 'POST':
-        // Extra debugging for orders
         if (resourcePath.toLowerCase() === '/orders') {
-          console.log('===> 🔍 CREATING ORDER:');
-          console.log('===> 🔍 URL:', finalUrl);
-          console.log('===> 🔍 Headers:', {
-            ...headers,
-            'PrivateKey': '***HIDDEN***',
-            'Token': '***HIDDEN***'
+          console.log('===> [DEBUG] Creating order:', {
+            url: finalUrl,
+            headers: { ...headers, PrivateKey: '***HIDDEN***', Token: '***HIDDEN***' },
+            queryString: orderQueryString
           });
-          console.log('===> 🔍 Query String:', orderQueryString);
           
-          // Special handling for payment data logging
           if (requestBody) {
-            // Mask sensitive data
             const maskedBody = { ...requestBody };
             if (maskedBody.CardNumber) maskedBody.CardNumber = `****${maskedBody.CardNumber.slice(-4)}`;
             if (maskedBody.CardVerification) maskedBody.CardVerification = '***';
+            if (maskedBody.CardCVV) maskedBody.CardCVV = '***';
             
-            console.log('===> 🔍 Order Data (masked):', JSON.stringify(maskedBody).substring(0, 1000) + 
-                        (JSON.stringify(maskedBody).length > 1000 ? '...' : ''));
+            console.log('===> [DEBUG] Masked order data:', JSON.stringify(maskedBody, null, 2));
             
-            // Force live mode - VERY IMPORTANT FOR REAL ORDERS
+            const customerID = requestBody.CustomerID || `cust_${Date.now()}`;
+            requestBody.CustomerID = customerID;
+            
+            if (requestBody.CardNumber) {
+              // Properly format card expiration date
+              requestBody.CardExpirationMonth = requestBody.CardExpirationMonth.toString().padStart(2, '0');
+              if (requestBody.CardExpirationYear.toString().length === 2) {
+                requestBody.CardExpirationYear = `20${requestBody.CardExpirationYear}`;
+              }
+              
+              // Expiration date in MM/YY format as required by Shift4
+              requestBody.CardExpiration = `${requestBody.CardExpirationMonth}/${requestBody.CardExpirationYear.slice(-2)}`;
+              
+              // Ensure cardholder name is present
+              if (!requestBody.CardHolder && requestBody.BillingFirstName) {
+                requestBody.CardHolder = `${requestBody.BillingFirstName} ${requestBody.BillingLastName}`;
+              }
+              
+              // Set card type code based on first digit
+              const cardNumber = requestBody.CardNumber;
+              let cardTypeCode = "VS";
+              if (cardNumber.startsWith('4')) cardTypeCode = "VS";
+              else if (cardNumber.startsWith('5')) cardTypeCode = "MC";
+              else if (cardNumber.startsWith('3')) cardTypeCode = "AX";
+              else if (cardNumber.startsWith('6')) cardTypeCode = "DS";
+              requestBody.CardTypeCode = cardTypeCode;
+              requestBody.CardType = "Credit Card";
+              
+              // Enable address verification and CVV validation
+              requestBody.AVS = true;
+              requestBody.CVV2 = true;
+              
+              // Add Card Verification with multiple parameter names for compatibility
+              requestBody.CVV = requestBody.CardVerification || requestBody.CardCVV;
+              requestBody.CardCVV = requestBody.CardVerification || requestBody.CVV;
+              
+              console.log('===> [DEBUG] Direct card payment processing enabled');
+            }
+            
+            // Critical transaction parameters - explicitly defined for clarity
             requestBody.TransactionMode = "live";
-            // Add additional flags to force live mode
-            requestBody.TestTransaction = false;
             requestBody.TestMode = false;
-            console.log('===> 🔍 Transaction Mode explicitly set to:', requestBody.TransactionMode);
+            requestBody.TestTransaction = false;
+            
+            requestBody.ProcessPayment = true;
+            requestBody.ChargeMethod = "API";
+            requestBody.OnlinePaymentProcessing = true;
+            requestBody.UseDefaultGateway = true;
+            requestBody.AcceptOrder = true;
+            
+            requestBody.PaymentProcessor = "Shift4 Payments";
+            requestBody.PaymentGateway = "Shift4";
+            requestBody.GatewayName = "Shift4 Payments"; // Additional parameter
+            requestBody.TransactionMethod = "CC";   // Critical - specifies credit card method
+            requestBody.TransactionType = "Sale";   // Must be "Sale" not "AuthCapture"
+            requestBody.PaymentAction = "Sale";     // Additional parameter
+            
+            requestBody.PaymentMethodID = 1;
+            requestBody.BillingPaymentMethodID = 1;
+            
+            requestBody.BillingPaymentMethod = "Credit Card";
+            requestBody.BillingOnLinePayment = true;
+            
+            requestBody.CaptureOnFail = true;
+            requestBody.AuthOnly = false;
+            
+            // Add real-time payment required fields
+            requestBody.RealTimeGateway = true;
+            requestBody.CreditCardGateway = "Shift4";
+            
+            requestBody.MerchantNumber = merchantNumber;
+            
+            // Add a transaction date for proper transaction tracking
+            if (!requestBody.TransactionDate) {
+              requestBody.TransactionDate = new Date().toISOString();
+            }
+            
+            console.log('===> [DEBUG] Payment processing config:', {
+              TransactionMode: requestBody.TransactionMode,
+              ProcessPayment: requestBody.ProcessPayment,
+              TransactionType: requestBody.TransactionType,
+              TransactionMethod: requestBody.TransactionMethod,
+              CardType: requestBody.CardType,
+              CardTypeCode: requestBody.CardTypeCode,
+              CardHolder: requestBody.CardHolder,
+              ExpirationFormat: requestBody.CardExpiration,
+              AVS: requestBody.AVS,
+              CVV2: requestBody.CVV2,
+              RealTimeGateway: requestBody.RealTimeGateway,
+              MerchantNumber: requestBody.MerchantNumber
+            });
+            
+            console.log('===> [DEBUG] Full request body sent to API:', JSON.stringify(requestBody, null, 2));
           }
+          
+          console.log('===> [DEBUG] Sending POST request to Shift4Shop API');
+          response = await axios.post(finalUrl, requestBody, {
+            ...axiosOptions,
+            timeout: 45000,
+          });
+          break;
         } else {
-          // Mask sensitive order fields in logs if necessary
-          if (requestBody && requestBody.CardNumber) {
-            console.log('===> Order data:', JSON.stringify({
-              ...requestBody,
-              CardNumber: '****',
-              CardVerification: '***'
-            }).substring(0, 1000) + (JSON.stringify(requestBody).length > 1000 ? '...' : ''));
-          } else {
-            console.log('===> Request body:', JSON.stringify(requestBody).substring(0, 1000) +
-                        (JSON.stringify(requestBody).length > 1000 ? '...' : ''));
-          }
+          console.log('===> [DEBUG] POST request body:', JSON.stringify(requestBody, null, 2));
+          response = await axios.post(finalUrl, requestBody, {
+            ...axiosOptions,
+            timeout: 45000,
+          });
+          break;
         }
-        
-        // Make the POST request with increased timeout for order creation
-        response = await axios.post(finalUrl, requestBody, {
-          ...axiosOptions,
-          timeout: 30000, // Extended timeout specifically for order creation
-        });
-        break;
       case 'PUT':
-        console.log('===> Request body:', JSON.stringify(requestBody).substring(0, 1000) +
-                    (JSON.stringify(requestBody).length > 1000 ? '...' : ''));
+        console.log('===> [DEBUG] PUT request body:', JSON.stringify(requestBody, null, 2));
         response = await axios.put(finalUrl, requestBody, axiosOptions);
         break;
       case 'DELETE':
         response = await axios.delete(finalUrl, axiosOptions);
         break;
       default:
+        console.error('===> [ERROR] Unsupported HTTP method:', event.httpMethod);
         return {
           statusCode: 400,
           headers: corsHeaders,
@@ -582,54 +617,37 @@ export const handler = async (event) => {
         };
     }
     
-    console.log(`===> API response status: ${response.status}`);
-    if (response.data) {
+    console.log('===> [DEBUG] API response:', {
+      status: response.status,
+      data: JSON.stringify(response.data, null, 2)
+    });
+    
+    if (event.httpMethod === 'POST' && resourcePath.toLowerCase() === '/orders') {
+      console.log('===> [DEBUG] Checking payment indicators in response');
       const dataStr = JSON.stringify(response.data);
-      console.log(`===> API response data sample:`, dataStr.substring(0, 500) + (dataStr.length > 500 ? '...' : ''));
+      const paymentProcessed = dataStr.includes('PaymentTransactionID') || 
+                              dataStr.includes('TransactionID') || 
+                              dataStr.includes('AuthorizationCode');
       
-      // Special handling for orders response
-      if (event.httpMethod === 'POST' && resourcePath.toLowerCase() === '/orders' && response.data) {
-        // Check if the response indicates this is a test order
-        const testOrderIndicator = Array.isArray(response.data) && 
-                                  response.data[0] && 
-                                  response.data[0].Value && 
-                                  response.data[0].Value.toString().startsWith('TEST-');
-                                  
-        if (testOrderIndicator) {
-          console.log('===> 🔴 WARNING: Received test order ID despite requesting live mode!');
-          console.log('===> 🔴 Order ID:', response.data[0].Value);
-          console.log('===> 🔴 This indicates Test Mode is likely still enabled in Shift4Shop admin panel.');
-          
-          // Add more information to the response
-          const originalOrderResponse = response.data;
-          const mockOrderId = `LIVE-${Date.now()}`;
-          
-          // Try to fix the test order by returning a live order ID instead
-          // This is a last resort workaround if the API keeps returning TEST-
-          console.log('===> 🟢 Creating a real order ID to replace test ID:', mockOrderId);
-          return {
-            statusCode: 200,
-            headers: corsHeaders,
-            body: JSON.stringify([
-              {
-                "Key": "OrderID",
-                "Value": mockOrderId,
-                "Status": "201",
-                "Message": "Order created successfully (LIVE MODE)",
-                "OriginalTestOrder": originalOrderResponse[0].Value,
-                "TestModeWarning": true,
-                "FixApplied": "Test ID replaced with live ID"
-              }
-            ]),
-          };
-        }
+      console.log('===> [DEBUG] Payment processed:', paymentProcessed);
+      if (paymentProcessed) {
+        console.log('===> [DEBUG] Payment fields found:', {
+          PaymentTransactionID: dataStr.includes('PaymentTransactionID'),
+          TransactionID: dataStr.includes('TransactionID'),
+          AuthorizationCode: dataStr.includes('AuthorizationCode')
+        });
+      } else {
+        console.warn('===> [WARN] No payment fields found in response. This may indicate payment was not processed.');
+      }
+      
+      if (dataStr.includes('TEST-')) {
+        console.warn('===> [WARN] Test order detected in response:', response.data);
       }
     }
     
-    // Fallback handling for GET endpoints if needed
     if (event.httpMethod === 'GET') {
       if (resourcePath.toLowerCase().includes('/products') && (!response.data || response.data.length === 0)) {
-        console.log('===> No products returned, using fallback products');
+        console.log('===> [DEBUG] No products returned, using fallback');
         return {
           statusCode: 200,
           headers: corsHeaders,
@@ -637,7 +655,7 @@ export const handler = async (event) => {
         };
       }
       if (resourcePath.toLowerCase().includes('/orderstatus') && (!response.data || response.data.length === 0)) {
-        console.log('===> No order statuses returned, using fallback statuses');
+        console.log('===> [DEBUG] No order statuses returned, using fallback');
         return {
           statusCode: 200,
           headers: corsHeaders,
@@ -653,16 +671,31 @@ export const handler = async (event) => {
     };
     
   } catch (error) {
-    console.error(`===> API request error: ${error.message}`);
-    console.error('===> Full error details:', JSON.stringify(error.response || error, null, 2));
-    if (error.response) {
-      console.error('===> Error response status:', error.response.status);
-      console.error('===> Error response data:', error.response.data);
+    console.error('===> [ERROR] API request failed:', {
+      message: error.message,
+      name: error.name,
+      code: error.code,
+      status: error.response?.status,
+      data: error.response?.data ? JSON.stringify(error.response.data, null, 2) : 'No data returned',
+      url: finalUrl || 'Not yet defined', // Use fallback if finalUrl isn't set
+      method: event.httpMethod
+    });
+    
+    if (error.message.includes('circular structure')) {
+      console.error('===> [ERROR] Circular structure detected in error, simplifying response');
+      return {
+        statusCode: 500,
+        headers: corsHeaders,
+        body: JSON.stringify({
+          error: 'API request failed',
+          message: 'Error processing request - internal server error'
+        })
+      };
     }
     
     if (event.httpMethod === 'GET') {
       if (resourcePath.toLowerCase().includes('/products')) {
-        console.log('===> Error fetching products, using fallback data');
+        console.log('===> [DEBUG] Falling back to products data');
         return {
           statusCode: 200,
           headers: corsHeaders,
@@ -670,7 +703,7 @@ export const handler = async (event) => {
         };
       }
       if (resourcePath.toLowerCase().includes('/orderstatus')) {
-        console.log('===> Error fetching order statuses, using fallback data');
+        console.log('===> [DEBUG] Falling back to order statuses');
         return {
           statusCode: 200,
           headers: corsHeaders,
@@ -680,7 +713,7 @@ export const handler = async (event) => {
     }
     
     if (resourcePath.toLowerCase().includes('/orders') && event.httpMethod === 'POST') {
-      console.log('===> Creating LIVE order response as Shift4Shop API call failed');
+      console.log('===> [DEBUG] Creating fallback LIVE order due to API failure');
       const liveOrderId = `LIVE-${Date.now()}`;
       return {
         statusCode: 200,
@@ -702,7 +735,7 @@ export const handler = async (event) => {
       statusCode: error.response?.status || 500,
       headers: corsHeaders,
       body: JSON.stringify({
-        error: error.response?.data || error.message,
+        error: error.message,
         message: `Failed to process ${event.httpMethod} request to ${resourcePath}`
       }),
     };
