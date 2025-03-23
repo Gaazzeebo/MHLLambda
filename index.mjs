@@ -47,34 +47,6 @@ const createMockOrder = (orderId) => {
   };
 };
 
-const createPaymentToken = async (cardDetails) => {
-  const storeUrl = process.env.SHIFT4SHOP_STORE_URL || 'https://3.146.128.151';
-  const privateKey = process.env.SHIFT4SHOP_PRIVATE_KEY || '37ab4b76efdd4a63c967655b9d616610';
-  const token = process.env.SHIFT4SHOP_TOKEN || '40e9abb2b22b00a5a9cb5aaad56eb818';
-
-  const headers = {
-    'SecureURL': '311n16875921454.3dcartstores.com',
-    'PrivateKey': privateKey,
-    'Token': token,
-    'Accept': 'application/json',
-    'Content-Type': 'application/json',
-  };
-
-  const url = `${storeUrl}/3dCartWebAPI/v1/PaymentTokens`;
-
-  try {
-    const response = await axios.post(url, cardDetails, { headers });
-    return response.data;
-  } catch (error) {
-    console.error('===> [ERROR] Failed to create payment token:', {
-      message: error.message,
-      status: error.response?.status,
-      data: error.response?.data ? JSON.stringify(error.response.data, null, 2) : 'No data'
-    });
-    throw error;
-  }
-};
-
 // List of allowed origins – add your domains here
 const allowedOrigins = [
   'https://main.d3oft2ruceh6kv.amplifyapp.com',
@@ -473,24 +445,6 @@ export const handler = async (event) => {
           status: error.response?.status,
           data: error.response?.data ? JSON.stringify(error.response.data, null, 2) : 'No data'
         });
-      }
-
-      if (event.httpMethod === 'POST' && resourcePath.toLowerCase() === '/create-payment-token') {
-        const cardDetails = requestBody;
-        try {
-          const paymentToken = await createPaymentToken(cardDetails);
-          return {
-            statusCode: 200,
-            headers: corsHeaders,
-            body: JSON.stringify(paymentToken),
-          };
-        } catch (error) {
-          return {
-            statusCode: 500,
-            headers: corsHeaders,
-            body: JSON.stringify({ error: 'Failed to create payment token', details: error.message }),
-          };
-        }
       }
 
       // Define order processing parameters carefully
